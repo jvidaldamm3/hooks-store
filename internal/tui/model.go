@@ -11,7 +11,7 @@ import (
 	"hooks-store/internal/ingest"
 )
 
-const maxRecentEvents = 20
+const maxRecentEvents = 4
 
 // Config holds the static information displayed in the TUI header.
 type Config struct {
