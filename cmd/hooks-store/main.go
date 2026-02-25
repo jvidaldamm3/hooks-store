@@ -8,13 +8,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"hooks-store/internal/ingest"
 	"hooks-store/internal/store"
+	"hooks-store/internal/tui"
 )
 
 var version = "dev"
@@ -37,6 +37,15 @@ func main() {
 
 	srv := ingest.New(ms)
 
+	// Event channel: owned by main, shared between ingest callback and TUI.
+	eventCh := make(chan ingest.IngestEvent, 256)
+	srv.SetOnIngest(func(evt ingest.IngestEvent) {
+		select {
+		case eventCh <- evt:
+		default: // drop if TUI is slow
+		}
+	})
+
 	httpSrv := &http.Server{
 		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
@@ -51,8 +60,7 @@ func main() {
 		os.Exit(1)
 	}
 	actualPort := ln.Addr().(*net.TCPAddr).Port
-
-	printBanner(actualPort, *meiliURL, *meiliIndex)
+	listenAddr := fmt.Sprintf("http://localhost:%d", actualPort)
 
 	// Graceful shutdown.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -62,24 +70,41 @@ func main() {
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer shutdownCancel()
 		httpSrv.Shutdown(shutdownCtx)
+		close(eventCh)
 	}
 
+	// Signal handler — SIGINT/SIGTERM triggers shutdown.
 	go func() {
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 		defer signal.Stop(sig)
 		select {
 		case <-sig:
-			fmt.Println("\nShutting down...")
 			shutdownOnce.Do(doShutdown)
 		case <-ctx.Done():
 		}
 	}()
 
-	if err := httpSrv.Serve(ln); err != nil && err != http.ErrServerClosed {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+	// Start HTTP server in the background.
+	go func() {
+		if err := httpSrv.Serve(ln); err != nil && err != http.ErrServerClosed {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	}()
+
+	// Run the TUI — blocks until user quits.
+	m := tui.NewModel(tui.Config{
+		Version:    version,
+		MeiliURL:   *meiliURL,
+		MeiliIndex: *meiliIndex,
+		ListenAddr: listenAddr,
+	}, eventCh, ctx, srv.ErrCount())
+
+	if err := tui.Run(m); err != nil {
+		fmt.Fprintf(os.Stderr, "TUI error: %v\n", err)
 	}
+
 	shutdownOnce.Do(doShutdown)
 }
 
@@ -88,18 +113,4 @@ func envOrDefault(key, fallback string) string {
 		return v
 	}
 	return fallback
-}
-
-func printBanner(port int, meiliURL, index string) {
-	title := fmt.Sprintf("hooks-store %s", version)
-	sep := strings.Repeat("─", 50)
-	fmt.Println(sep)
-	fmt.Printf("  %s\n", title)
-	fmt.Println(sep)
-	fmt.Printf("  MeiliSearch: %s (index: %s)\n", meiliURL, index)
-	fmt.Printf("  Listening:   http://localhost:%d\n", port)
-	fmt.Println("  Endpoints:   POST /ingest  GET /health  GET /stats")
-	fmt.Println(sep)
-	fmt.Println("  Waiting for events...")
-	fmt.Println()
 }

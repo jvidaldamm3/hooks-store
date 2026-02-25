@@ -18,6 +18,16 @@ const (
 	maxJSONDepth = 100
 )
 
+// IngestEvent is a lightweight value type carrying only the fields the TUI needs.
+// It decouples the TUI from the full hookevt.HookEvent / store.Document types.
+type IngestEvent struct {
+	HookType  string
+	ToolName  string
+	SessionID string
+	BodySize  int
+	Timestamp time.Time
+}
+
 // Server is the HTTP ingest server for receiving hook events from the monitor.
 type Server struct {
 	store     store.EventStore
@@ -25,6 +35,18 @@ type Server struct {
 	ingested  atomic.Int64
 	errors    atomic.Int64
 	lastEvent atomic.Value // stores time.Time
+	onIngest  func(IngestEvent)
+}
+
+// SetOnIngest registers a callback invoked after each successful ingest.
+// The callback must be non-blocking (e.g. a non-blocking channel send).
+func (s *Server) SetOnIngest(fn func(IngestEvent)) {
+	s.onIngest = fn
+}
+
+// ErrCount returns the atomic error counter for direct reads by the TUI.
+func (s *Server) ErrCount() *atomic.Int64 {
+	return &s.errors
 }
 
 // New creates a new ingest Server wired to the given EventStore.
@@ -95,6 +117,18 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 
 	s.ingested.Add(1)
 	s.lastEvent.Store(time.Now())
+
+	if s.onIngest != nil {
+		toolName, _ := evt.Data["tool_name"].(string)
+		sessionID, _ := evt.Data["session_id"].(string)
+		s.onIngest(IngestEvent{
+			HookType:  evt.HookType,
+			ToolName:  toolName,
+			SessionID: sessionID,
+			BodySize:  len(body),
+			Timestamp: evt.Timestamp,
+		})
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
