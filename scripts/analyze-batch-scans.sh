@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-MEILI_URL="${MEILI_URL:-http://localhost:7700}"
+MEILI_URL="${MEILI_URL:-http://127.0.0.1:7700}"
 MEILI_KEY="${MEILI_KEY:-}"
 MEILI_INDEX="${MEILI_INDEX:-hook-events}"
 
@@ -102,8 +102,9 @@ auto_detect_sessions() {
     done <<< "$sessions"
 
     # Sort by timestamp descending, take the two most recent.
+    # Filter out sessions with no events (first_ts=0) to avoid selecting stale entries.
     local sorted
-    sorted=$(printf '%s\n' "${session_times[@]}" | sort -t: -k1 -rn | head -2)
+    sorted=$(printf '%s\n' "${session_times[@]}" | grep -v '^0:' | sort -t: -k1 -rn | head -2)
 
     # First line = most recent (session B / without), second = second most recent (session A / with)
     local session_b session_a
@@ -126,7 +127,7 @@ analyze_session() {
     total=$(echo "$events" | jq 'length')
 
     # Count per tool_name.
-    local read_count glob_count grep_count bash_count write_count edit_count task_count other_count
+    local read_count glob_count grep_count bash_count write_count edit_count task_count
     read_count=$(echo "$events"  | jq '[.[] | select(.tool_name == "Read")]  | length')
     glob_count=$(echo "$events"  | jq '[.[] | select(.tool_name == "Glob")]  | length')
     grep_count=$(echo "$events"  | jq '[.[] | select(.tool_name == "Grep")]  | length')

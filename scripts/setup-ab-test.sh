@@ -9,7 +9,8 @@
 
 set -euo pipefail
 
-REPO="${1:-../claude-hooks-monitor}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO="${1:-$(cd "$SCRIPT_DIR/../.." && pwd)/claude-hooks-monitor}"
 WORKTREE="/tmp/claude-ab-test-no-claudemd"
 
 # ── Validation ───────────────────────────────────────────────────────────────

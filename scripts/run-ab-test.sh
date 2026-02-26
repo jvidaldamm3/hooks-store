@@ -120,6 +120,9 @@ log "Creating worktree without CLAUDE.md"
 if [[ -d "$WORKTREE" ]]; then
     echo "  Worktree already exists, removing..."
     git -C "$REPO" worktree remove "$WORKTREE" --force 2>/dev/null || rm -rf "$WORKTREE"
+    if [[ -d "$WORKTREE" ]]; then
+        fail "Could not remove existing worktree at $WORKTREE"
+    fi
 fi
 
 git -C "$REPO" worktree add "$WORKTREE" HEAD --detach
@@ -163,7 +166,7 @@ wait_for_indexing
 
 log "Identifying Session A"
 SESSIONS_AFTER_A=$(get_session_ids)
-SESSION_A_ID=$(comm -13 <(echo "$SESSIONS_BEFORE") <(echo "$SESSIONS_AFTER_A") | head -1)
+SESSION_A_ID=$(comm -13 <(echo "$SESSIONS_BEFORE" | grep -v '^$') <(echo "$SESSIONS_AFTER_A" | grep -v '^$') | head -1)
 
 if [[ -z "$SESSION_A_ID" ]]; then
     echo "  ⚠ Could not detect Session A's ID (hooks may not be configured)."
@@ -199,7 +202,7 @@ wait_for_indexing
 
 log "Identifying Session B"
 SESSIONS_AFTER_B=$(get_session_ids)
-SESSION_B_ID=$(comm -13 <(echo "$SESSIONS_AFTER_A") <(echo "$SESSIONS_AFTER_B") | head -1)
+SESSION_B_ID=$(comm -13 <(echo "$SESSIONS_AFTER_A" | grep -v '^$') <(echo "$SESSIONS_AFTER_B" | grep -v '^$') | head -1)
 
 if [[ -z "$SESSION_B_ID" ]]; then
     echo "  ⚠ Could not detect Session B's ID."
