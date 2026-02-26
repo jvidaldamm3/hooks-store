@@ -150,15 +150,26 @@ fetch_all_events() {
 # ── Analysis Functions ───────────────────────────────────────────────────────
 
 # Compute all metrics for a session. Outputs a JSON summary.
+# Uses temp files + --slurpfile to avoid "Argument list too long" on large event sets.
 compute_session_metrics() {
     local session_id="$1" tool_events="$2" compact_events="$3" window="$4"
 
+    local tmp_tools tmp_compacts
+    tmp_tools=$(mktemp "$REPORT_DIR/data/.tools-XXXXXX.json")
+    tmp_compacts=$(mktemp "$REPORT_DIR/data/.compacts-XXXXXX.json")
+    echo "$tool_events" > "$tmp_tools"
+    echo "$compact_events" > "$tmp_compacts"
+
     jq -n \
         --arg sid "$session_id" \
-        --argjson tools "$tool_events" \
-        --argjson compacts "$compact_events" \
+        --slurpfile tools_arr "$tmp_tools" \
+        --slurpfile compacts_arr "$tmp_compacts" \
         --argjson window "$window" \
         '
+        # --slurpfile wraps in an array; unwrap.
+        $tools_arr[0] as $tools |
+        $compacts_arr[0] as $compacts |
+
         # Tool counts.
         ($tools | length) as $total |
         ([$tools[] | select(.tool_name == "Read")]  | length) as $read |
@@ -250,16 +261,26 @@ compute_session_metrics() {
             }
         }
         '
+
+    rm -f "$tmp_tools" "$tmp_compacts"
 }
 
 # Build comparison JSON from two session summaries.
 build_comparison() {
     local data_a="$1" data_b="$2"
 
+    local tmp_a tmp_b
+    tmp_a=$(mktemp "$REPORT_DIR/data/.cmp-a-XXXXXX.json")
+    tmp_b=$(mktemp "$REPORT_DIR/data/.cmp-b-XXXXXX.json")
+    echo "$data_a" > "$tmp_a"
+    echo "$data_b" > "$tmp_b"
+
     jq -n \
-        --argjson a "$data_a" \
-        --argjson b "$data_b" \
+        --slurpfile a_arr "$tmp_a" \
+        --slurpfile b_arr "$tmp_b" \
         '
+        $a_arr[0] as $a | $b_arr[0] as $b |
+
         def delta($va; $vb):
             { a: $va, b: $vb, diff: ($vb - $va),
               pct: (if $vb != 0 then (($vb - $va) * 1000 / $vb | round / 10) else null end) };
@@ -278,6 +299,8 @@ build_comparison() {
             unique_files_read: delta($a.unique_files_read; $b.unique_files_read)
         }
         '
+
+    rm -f "$tmp_a" "$tmp_b"
 }
 
 # ── Report Generation ────────────────────────────────────────────────────────

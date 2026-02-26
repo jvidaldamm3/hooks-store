@@ -136,12 +136,20 @@ analyze_session() {
     grep_count=$(echo "$tool_events" | jq '[.[] | select(.tool_name == "Grep")] | length')
 
     # For each compaction event, count exploration calls in the window after it.
+    # Use temp files to avoid "Argument list too long" with large event sets.
+    local tmp_tools tmp_compacts
+    tmp_tools=$(mktemp /tmp/claude-compact-tools.XXXXXX)
+    tmp_compacts=$(mktemp /tmp/claude-compact-compacts.XXXXXX)
+    echo "$tool_events" > "$tmp_tools"
+    echo "$compact_events" > "$tmp_compacts"
+
     local post_compact_data
     post_compact_data=$(jq -n \
-        --argjson tools "$tool_events" \
-        --argjson compacts "$compact_events" \
+        --slurpfile tools_arr "$tmp_tools" \
+        --slurpfile compacts_arr "$tmp_compacts" \
         --argjson window "$window" \
         '
+        $tools_arr[0] as $tools | $compacts_arr[0] as $compacts |
         [$compacts[].timestamp_unix] as $compact_times |
         [
             $compact_times[] | . as $ct |
@@ -175,6 +183,8 @@ analyze_session() {
             }
         ]
         ')
+
+    rm -f "$tmp_tools" "$tmp_compacts"
 
     # Aggregate post-compaction stats.
     local total_post_reads avg_post_reads max_post_reads
