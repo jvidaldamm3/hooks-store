@@ -10,8 +10,14 @@ type Document struct {
 	Timestamp     string                 `json:"timestamp"`
 	TimestampUnix int64                  `json:"timestamp_unix"`
 	SessionID     string                 `json:"session_id,omitempty"`
-	ToolName      string                 `json:"tool_name,omitempty"`
-	DataFlat      string                 `json:"data_flat"`
+	ToolName          string                 `json:"tool_name,omitempty"`
+	HasClaudeMD       bool                   `json:"has_claude_md"`
+	InputTokens       int64                  `json:"input_tokens,omitempty"`
+	OutputTokens      int64                  `json:"output_tokens,omitempty"`
+	CacheReadTokens   int64                  `json:"cache_read_tokens,omitempty"`
+	CacheCreateTokens int64                  `json:"cache_create_tokens,omitempty"`
+	CostUSD           float64                `json:"cost_usd,omitempty"`
+	DataFlat          string                 `json:"data_flat"`
 	Data          map[string]interface{} `json:"data"`
 }
 

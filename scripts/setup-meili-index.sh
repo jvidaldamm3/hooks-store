@@ -77,7 +77,7 @@ fi
 # Filterable attributes (for faceted queries).
 echo -n "  Setting filterable attributes... "
 if curl_meili PUT "/indexes/$INDEX/settings/filterable-attributes" \
-    '["hook_type","session_id","tool_name","timestamp_unix"]'; then
+    '["hook_type","session_id","tool_name","timestamp_unix","has_claude_md","cost_usd"]'; then
     echo "ok"
 else
     echo "failed" >&2; exit 1
@@ -86,7 +86,7 @@ fi
 # Sortable attributes (chronological ordering).
 echo -n "  Setting sortable attributes... "
 if curl_meili PUT "/indexes/$INDEX/settings/sortable-attributes" \
-    '["timestamp_unix"]'; then
+    '["timestamp_unix","cost_usd","input_tokens","output_tokens"]'; then
     echo "ok"
 else
     echo "failed" >&2; exit 1

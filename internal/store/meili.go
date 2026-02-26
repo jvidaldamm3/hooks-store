@@ -56,6 +56,8 @@ func NewMeiliStore(endpoint, apiKey, indexName string) (*MeiliStore, error) {
 		"session_id",
 		"tool_name",
 		"timestamp_unix",
+		"has_claude_md",
+		"cost_usd",
 	}
 	_, err = index.UpdateFilterableAttributes(&filterAttrs)
 	if err != nil {
@@ -64,6 +66,9 @@ func NewMeiliStore(endpoint, apiKey, indexName string) (*MeiliStore, error) {
 
 	_, err = index.UpdateSortableAttributes(&[]string{
 		"timestamp_unix",
+		"cost_usd",
+		"input_tokens",
+		"output_tokens",
 	})
 	if err != nil {
 		return nil, fmt.Errorf("update sortable attributes: %w", err)

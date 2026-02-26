@@ -176,6 +176,144 @@ func TestHookEventToDocument_UniqueIDs(t *testing.T) {
 	}
 }
 
+func TestHookEventToDocument_HasClaudeMD(t *testing.T) {
+	t.Parallel()
+
+	evt := hookevt.HookEvent{
+		HookType:  "SessionStart",
+		Timestamp: time.Now(),
+		Data: map[string]interface{}{
+			"session_id": "sess-123",
+			"_monitor": map[string]interface{}{
+				"has_claude_md": true,
+				"project_dir":  "/tmp/myproject",
+			},
+		},
+	}
+	doc := HookEventToDocument(evt)
+	if !doc.HasClaudeMD {
+		t.Error("HasClaudeMD should be true when _monitor.has_claude_md is true")
+	}
+}
+
+func TestHookEventToDocument_HasClaudeMD_Missing(t *testing.T) {
+	t.Parallel()
+
+	evt := hookevt.HookEvent{
+		HookType:  "PreToolUse",
+		Timestamp: time.Now(),
+		Data:      map[string]interface{}{"tool_name": "Write"},
+	}
+	doc := HookEventToDocument(evt)
+	if doc.HasClaudeMD {
+		t.Error("HasClaudeMD should default to false when _monitor is absent")
+	}
+}
+
+func TestHookEventToDocument_TokenMetrics_TopLevel(t *testing.T) {
+	t.Parallel()
+
+	evt := hookevt.HookEvent{
+		HookType:  "Stop",
+		Timestamp: time.Now(),
+		Data: map[string]interface{}{
+			"input_tokens":                 float64(1500),
+			"output_tokens":                float64(500),
+			"cache_read_input_tokens":      float64(200),
+			"cache_creation_input_tokens":  float64(100),
+			"total_cost_usd":              0.0042,
+		},
+	}
+	doc := HookEventToDocument(evt)
+
+	if doc.InputTokens != 1500 {
+		t.Errorf("InputTokens = %d, want 1500", doc.InputTokens)
+	}
+	if doc.OutputTokens != 500 {
+		t.Errorf("OutputTokens = %d, want 500", doc.OutputTokens)
+	}
+	if doc.CacheReadTokens != 200 {
+		t.Errorf("CacheReadTokens = %d, want 200", doc.CacheReadTokens)
+	}
+	if doc.CacheCreateTokens != 100 {
+		t.Errorf("CacheCreateTokens = %d, want 100", doc.CacheCreateTokens)
+	}
+	if doc.CostUSD != 0.0042 {
+		t.Errorf("CostUSD = %f, want 0.0042", doc.CostUSD)
+	}
+}
+
+func TestHookEventToDocument_TokenMetrics_NestedUsage(t *testing.T) {
+	t.Parallel()
+
+	evt := hookevt.HookEvent{
+		HookType:  "Stop",
+		Timestamp: time.Now(),
+		Data: map[string]interface{}{
+			"usage": map[string]interface{}{
+				"input_tokens":  float64(2000),
+				"output_tokens": float64(800),
+			},
+			"total_cost_usd": 0.01,
+		},
+	}
+	doc := HookEventToDocument(evt)
+
+	if doc.InputTokens != 2000 {
+		t.Errorf("InputTokens = %d, want 2000", doc.InputTokens)
+	}
+	if doc.OutputTokens != 800 {
+		t.Errorf("OutputTokens = %d, want 800", doc.OutputTokens)
+	}
+	if doc.CostUSD != 0.01 {
+		t.Errorf("CostUSD = %f, want 0.01", doc.CostUSD)
+	}
+}
+
+func TestHookEventToDocument_TokenMetrics_StopHookData(t *testing.T) {
+	t.Parallel()
+
+	evt := hookevt.HookEvent{
+		HookType:  "Stop",
+		Timestamp: time.Now(),
+		Data: map[string]interface{}{
+			"stop_hook_data": map[string]interface{}{
+				"total_cost_usd": 0.05,
+				"usage": map[string]interface{}{
+					"input_tokens":  float64(3000),
+					"output_tokens": float64(1200),
+				},
+			},
+		},
+	}
+	doc := HookEventToDocument(evt)
+
+	if doc.InputTokens != 3000 {
+		t.Errorf("InputTokens = %d, want 3000", doc.InputTokens)
+	}
+	if doc.OutputTokens != 1200 {
+		t.Errorf("OutputTokens = %d, want 1200", doc.OutputTokens)
+	}
+	if doc.CostUSD != 0.05 {
+		t.Errorf("CostUSD = %f, want 0.05", doc.CostUSD)
+	}
+}
+
+func TestHookEventToDocument_TokenMetrics_Missing(t *testing.T) {
+	t.Parallel()
+
+	evt := hookevt.HookEvent{
+		HookType:  "PreToolUse",
+		Timestamp: time.Now(),
+		Data:      map[string]interface{}{"tool_name": "Write"},
+	}
+	doc := HookEventToDocument(evt)
+
+	if doc.InputTokens != 0 || doc.OutputTokens != 0 || doc.CostUSD != 0 {
+		t.Error("Token metrics should be zero when not present in data")
+	}
+}
+
 func TestHookEventToDocument_TimestampUTC(t *testing.T) {
 	t.Parallel()
 
