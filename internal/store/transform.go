@@ -1,7 +1,8 @@
 package store
 
 import (
-	"encoding/json"
+	"sort"
+	"strings"
 
 	"hooks-store/internal/hookevt"
 
@@ -27,23 +28,106 @@ func HookEventToDocument(evt hookevt.HookEvent) Document {
 		doc.ToolName = tn
 	}
 
+	// Extract prompt text (UserPromptSubmit events).
+	if p, ok := extractString(evt.Data, "prompt"); ok {
+		doc.Prompt = p
+	}
+
+	// Extract file_path from tool_input (Read/Edit/Write/Glob events).
+	if ti, ok := extractNestedMap(evt.Data, "tool_input"); ok {
+		if fp, ok := extractString(ti, "file_path"); ok {
+			doc.FilePath = fp
+		}
+	}
+
+	// Extract error message (PostToolUseFailure events).
+	if em, ok := extractString(evt.Data, "error"); ok {
+		doc.ErrorMessage = em
+	}
+
+	// Extract permission_mode.
+	if pm, ok := extractString(evt.Data, "permission_mode"); ok {
+		doc.PermissionMode = pm
+	}
+
+	// Extract working directory (present on all events).
+	if cwd, ok := extractString(evt.Data, "cwd"); ok {
+		doc.Cwd = cwd
+	}
+
 	// Extract CLAUDE.md flag from _monitor metadata (set by hook-client).
 	if monitor, ok := extractNestedMap(evt.Data, "_monitor"); ok {
 		if hasMD, ok := extractBool(monitor, "has_claude_md"); ok {
 			doc.HasClaudeMD = hasMD
+		}
+		if pd, ok := extractString(monitor, "project_dir"); ok {
+			doc.ProjectDir = pd
 		}
 	}
 
 	// Extract token/cost metrics from the event data.
 	extractTokenMetrics(&doc, evt.Data)
 
-	// Serialize the entire Data map to a flat JSON string for full-text search.
+	// Extract leaf string values for full-text search.
 	// MeiliSearch indexes string fields for search — nested maps are not traversed.
-	if b, err := json.Marshal(evt.Data); err == nil {
-		doc.DataFlat = string(b)
-	}
+	// Using values-only extraction eliminates JSON key noise from search tokens.
+	doc.DataFlat = extractStringValues(evt.Data)
 
 	return doc
+}
+
+// DocumentToPromptDocument converts a Document to a PromptDocument for the
+// dedicated prompts index. Only meaningful for UserPromptSubmit events.
+func DocumentToPromptDocument(doc Document) PromptDocument {
+	return PromptDocument{
+		ID:             doc.ID,
+		HookType:       doc.HookType,
+		Timestamp:      doc.Timestamp,
+		TimestampUnix:  doc.TimestampUnix,
+		SessionID:      doc.SessionID,
+		Prompt:         doc.Prompt,
+		PromptLength:   len(doc.Prompt),
+		Cwd:            doc.Cwd,
+		ProjectDir:     doc.ProjectDir,
+		PermissionMode: doc.PermissionMode,
+		HasClaudeMD:    doc.HasClaudeMD,
+	}
+}
+
+// extractStringValues recursively extracts string leaf values from a data map,
+// skipping all keys and non-string values (numbers, bools, null).
+// Returns a space-separated string suitable for full-text search indexing.
+func extractStringValues(data map[string]interface{}) string {
+	if data == nil {
+		return ""
+	}
+	var values []string
+	collectStringValues(data, &values)
+	return strings.Join(values, " ")
+}
+
+// collectStringValues is the recursive helper for extractStringValues.
+func collectStringValues(v interface{}, values *[]string) {
+	switch val := v.(type) {
+	case string:
+		if val != "" {
+			*values = append(*values, val)
+		}
+	case map[string]interface{}:
+		keys := make([]string, 0, len(val))
+		for k := range val {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			collectStringValues(val[k], values)
+		}
+	case []interface{}:
+		for _, elem := range val {
+			collectStringValues(elem, values)
+		}
+	// float64, bool, nil — skip (not useful for text search)
+	}
 }
 
 // extractString retrieves a string value from a JSON-unmarshaled map.

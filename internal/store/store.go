@@ -17,8 +17,30 @@ type Document struct {
 	CacheReadTokens   int64                  `json:"cache_read_tokens,omitempty"`
 	CacheCreateTokens int64                  `json:"cache_create_tokens,omitempty"`
 	CostUSD           float64                `json:"cost_usd,omitempty"`
+	Prompt            string                 `json:"prompt,omitempty"`
+	FilePath          string                 `json:"file_path,omitempty"`
+	ErrorMessage      string                 `json:"error_message,omitempty"`
+	ProjectDir        string                 `json:"project_dir,omitempty"`
+	PermissionMode    string                 `json:"permission_mode,omitempty"`
+	Cwd               string                 `json:"cwd,omitempty"`
 	DataFlat          string                 `json:"data_flat"`
 	Data          map[string]interface{} `json:"data"`
+}
+
+// PromptDocument is a lean MeiliSearch document for the dedicated prompts index.
+// Stores only UserPromptSubmit events with prompt-specific derived fields.
+type PromptDocument struct {
+	ID             string `json:"id"`
+	HookType       string `json:"hook_type"`
+	Timestamp      string `json:"timestamp"`
+	TimestampUnix  int64  `json:"timestamp_unix"`
+	SessionID      string `json:"session_id,omitempty"`
+	Prompt         string `json:"prompt"`
+	PromptLength   int    `json:"prompt_length"`
+	Cwd            string `json:"cwd,omitempty"`
+	ProjectDir     string `json:"project_dir,omitempty"`
+	PermissionMode string `json:"permission_mode,omitempty"`
+	HasClaudeMD    bool   `json:"has_claude_md"`
 }
 
 // EventStore is the storage port for persisting hook event documents.

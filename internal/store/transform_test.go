@@ -1,7 +1,6 @@
 package store
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -64,18 +63,19 @@ func TestHookEventToDocument_DataFlat(t *testing.T) {
 
 	doc := HookEventToDocument(evt)
 
-	// DataFlat should be valid JSON.
-	var parsed map[string]interface{}
-	if err := json.Unmarshal([]byte(doc.DataFlat), &parsed); err != nil {
-		t.Fatalf("DataFlat is not valid JSON: %v", err)
-	}
-
-	// Should contain nested values as searchable text.
+	// Should contain leaf string values.
 	if !strings.Contains(doc.DataFlat, "hello world") {
 		t.Error("DataFlat should contain 'hello world'")
 	}
-	if !strings.Contains(doc.DataFlat, "deep") {
-		t.Error("DataFlat should contain nested key 'deep'")
+	if !strings.Contains(doc.DataFlat, "value") {
+		t.Error("DataFlat should contain nested value 'value'")
+	}
+	// Should NOT contain JSON keys.
+	if strings.Contains(doc.DataFlat, "tool_name") {
+		t.Error("DataFlat should not contain JSON key 'tool_name'")
+	}
+	if strings.Contains(doc.DataFlat, "nested") {
+		t.Error("DataFlat should not contain JSON key 'nested'")
 	}
 }
 
@@ -109,8 +109,8 @@ func TestHookEventToDocument_EmptyData(t *testing.T) {
 
 	doc := HookEventToDocument(evt)
 
-	if doc.DataFlat != "{}" {
-		t.Errorf("DataFlat = %q, want {}", doc.DataFlat)
+	if doc.DataFlat != "" {
+		t.Errorf("DataFlat = %q, want empty string", doc.DataFlat)
 	}
 	if doc.Data == nil {
 		t.Error("Data should not be nil")
@@ -128,9 +128,8 @@ func TestHookEventToDocument_NilData(t *testing.T) {
 
 	doc := HookEventToDocument(evt)
 
-	// json.Marshal(nil map) produces "null"
-	if doc.DataFlat != "null" {
-		t.Errorf("DataFlat = %q, want null", doc.DataFlat)
+	if doc.DataFlat != "" {
+		t.Errorf("DataFlat = %q, want empty string", doc.DataFlat)
 	}
 }
 
@@ -176,6 +175,125 @@ func TestHookEventToDocument_UniqueIDs(t *testing.T) {
 	}
 }
 
+func TestHookEventToDocument_Prompt(t *testing.T) {
+	t.Parallel()
+
+	evt := hookevt.HookEvent{
+		HookType:  "UserPromptSubmit",
+		Timestamp: time.Now(),
+		Data: map[string]interface{}{
+			"session_id": "sess-123",
+			"prompt":     "explain the architecture",
+		},
+	}
+	doc := HookEventToDocument(evt)
+	if doc.Prompt != "explain the architecture" {
+		t.Errorf("Prompt = %q, want %q", doc.Prompt, "explain the architecture")
+	}
+}
+
+func TestHookEventToDocument_Prompt_Missing(t *testing.T) {
+	t.Parallel()
+
+	evt := hookevt.HookEvent{
+		HookType:  "PreToolUse",
+		Timestamp: time.Now(),
+		Data:      map[string]interface{}{"tool_name": "Read"},
+	}
+	doc := HookEventToDocument(evt)
+	if doc.Prompt != "" {
+		t.Errorf("Prompt should be empty when missing, got %q", doc.Prompt)
+	}
+}
+
+func TestHookEventToDocument_FilePath(t *testing.T) {
+	t.Parallel()
+
+	evt := hookevt.HookEvent{
+		HookType:  "PreToolUse",
+		Timestamp: time.Now(),
+		Data: map[string]interface{}{
+			"tool_name": "Read",
+			"tool_input": map[string]interface{}{
+				"file_path": "/home/user/project/main.go",
+			},
+		},
+	}
+	doc := HookEventToDocument(evt)
+	if doc.FilePath != "/home/user/project/main.go" {
+		t.Errorf("FilePath = %q, want %q", doc.FilePath, "/home/user/project/main.go")
+	}
+}
+
+func TestHookEventToDocument_FilePath_NoToolInput(t *testing.T) {
+	t.Parallel()
+
+	evt := hookevt.HookEvent{
+		HookType:  "PreToolUse",
+		Timestamp: time.Now(),
+		Data: map[string]interface{}{
+			"tool_name": "Bash",
+		},
+	}
+	doc := HookEventToDocument(evt)
+	if doc.FilePath != "" {
+		t.Errorf("FilePath should be empty when tool_input is absent, got %q", doc.FilePath)
+	}
+}
+
+func TestHookEventToDocument_ErrorMessage(t *testing.T) {
+	t.Parallel()
+
+	evt := hookevt.HookEvent{
+		HookType:  "PostToolUseFailure",
+		Timestamp: time.Now(),
+		Data: map[string]interface{}{
+			"tool_name": "Write",
+			"error":     "permission denied: /etc/passwd",
+		},
+	}
+	doc := HookEventToDocument(evt)
+	if doc.ErrorMessage != "permission denied: /etc/passwd" {
+		t.Errorf("ErrorMessage = %q, want %q", doc.ErrorMessage, "permission denied: /etc/passwd")
+	}
+}
+
+func TestHookEventToDocument_ProjectDir(t *testing.T) {
+	t.Parallel()
+
+	evt := hookevt.HookEvent{
+		HookType:  "SessionStart",
+		Timestamp: time.Now(),
+		Data: map[string]interface{}{
+			"_monitor": map[string]interface{}{
+				"has_claude_md": true,
+				"project_dir":  "/home/user/my-project",
+			},
+		},
+	}
+	doc := HookEventToDocument(evt)
+	if doc.ProjectDir != "/home/user/my-project" {
+		t.Errorf("ProjectDir = %q, want %q", doc.ProjectDir, "/home/user/my-project")
+	}
+}
+
+func TestHookEventToDocument_PermissionMode(t *testing.T) {
+	t.Parallel()
+
+	evt := hookevt.HookEvent{
+		HookType:  "PreToolUse",
+		Timestamp: time.Now(),
+		Data: map[string]interface{}{
+			"tool_name":       "Write",
+			"permission_mode": "bypassPermissions",
+		},
+	}
+	doc := HookEventToDocument(evt)
+	if doc.PermissionMode != "bypassPermissions" {
+		t.Errorf("PermissionMode = %q, want %q", doc.PermissionMode, "bypassPermissions")
+	}
+}
+
 func TestHookEventToDocument_HasClaudeMD(t *testing.T) {
 	t.Parallel()
 
@@ -194,6 +312,9 @@ func TestHookEventToDocument_HasClaudeMD(t *testing.T) {
 	if !doc.HasClaudeMD {
 		t.Error("HasClaudeMD should be true when _monitor.has_claude_md is true")
 	}
+	if doc.ProjectDir != "/tmp/myproject" {
+		t.Errorf("ProjectDir = %q, want /tmp/myproject", doc.ProjectDir)
+	}
 }
 
 func TestHookEventToDocument_HasClaudeMD_Missing(t *testing.T) {
@@ -207,6 +328,37 @@ func TestHookEventToDocument_HasClaudeMD_Missing(t *testing.T) {
 	doc := HookEventToDocument(evt)
 	if doc.HasClaudeMD {
 		t.Error("HasClaudeMD should default to false when _monitor is absent")
+	}
+}
+
+func TestHookEventToDocument_Cwd(t *testing.T) {
+	t.Parallel()
+
+	evt := hookevt.HookEvent{
+		HookType:  "PreToolUse",
+		Timestamp: time.Now(),
+		Data: map[string]interface{}{
+			"tool_name": "Read",
+			"cwd":       "/home/user/project",
+		},
+	}
+	doc := HookEventToDocument(evt)
+	if doc.Cwd != "/home/user/project" {
+		t.Errorf("Cwd = %q, want %q", doc.Cwd, "/home/user/project")
+	}
+}
+
+func TestHookEventToDocument_Cwd_Missing(t *testing.T) {
+	t.Parallel()
+
+	evt := hookevt.HookEvent{
+		HookType:  "PreToolUse",
+		Timestamp: time.Now(),
+		Data:      map[string]interface{}{"tool_name": "Read"},
+	}
+	doc := HookEventToDocument(evt)
+	if doc.Cwd != "" {
+		t.Errorf("Cwd should be empty when missing, got %q", doc.Cwd)
 	}
 }
 
@@ -311,6 +463,150 @@ func TestHookEventToDocument_TokenMetrics_Missing(t *testing.T) {
 
 	if doc.InputTokens != 0 || doc.OutputTokens != 0 || doc.CostUSD != 0 {
 		t.Error("Token metrics should be zero when not present in data")
+	}
+}
+
+func TestDocumentToPromptDocument(t *testing.T) {
+	t.Parallel()
+
+	doc := Document{
+		ID:             "test-uuid-123",
+		HookType:       "UserPromptSubmit",
+		Timestamp:      "2026-02-25T14:30:00.000Z",
+		TimestampUnix:  1772029800,
+		SessionID:      "sess-abc-123",
+		Prompt:         "explain the architecture",
+		Cwd:            "/home/user/project",
+		ProjectDir:     "/home/user/project",
+		PermissionMode: "default",
+		HasClaudeMD:    true,
+	}
+
+	pdoc := DocumentToPromptDocument(doc)
+
+	if pdoc.ID != doc.ID {
+		t.Errorf("ID = %q, want %q", pdoc.ID, doc.ID)
+	}
+	if pdoc.HookType != doc.HookType {
+		t.Errorf("HookType = %q, want %q", pdoc.HookType, doc.HookType)
+	}
+	if pdoc.Timestamp != doc.Timestamp {
+		t.Errorf("Timestamp = %q, want %q", pdoc.Timestamp, doc.Timestamp)
+	}
+	if pdoc.TimestampUnix != doc.TimestampUnix {
+		t.Errorf("TimestampUnix = %d, want %d", pdoc.TimestampUnix, doc.TimestampUnix)
+	}
+	if pdoc.SessionID != doc.SessionID {
+		t.Errorf("SessionID = %q, want %q", pdoc.SessionID, doc.SessionID)
+	}
+	if pdoc.Prompt != doc.Prompt {
+		t.Errorf("Prompt = %q, want %q", pdoc.Prompt, doc.Prompt)
+	}
+	if pdoc.PromptLength != len(doc.Prompt) {
+		t.Errorf("PromptLength = %d, want %d", pdoc.PromptLength, len(doc.Prompt))
+	}
+	if pdoc.Cwd != doc.Cwd {
+		t.Errorf("Cwd = %q, want %q", pdoc.Cwd, doc.Cwd)
+	}
+	if pdoc.ProjectDir != doc.ProjectDir {
+		t.Errorf("ProjectDir = %q, want %q", pdoc.ProjectDir, doc.ProjectDir)
+	}
+	if pdoc.PermissionMode != doc.PermissionMode {
+		t.Errorf("PermissionMode = %q, want %q", pdoc.PermissionMode, doc.PermissionMode)
+	}
+	if pdoc.HasClaudeMD != doc.HasClaudeMD {
+		t.Errorf("HasClaudeMD = %v, want %v", pdoc.HasClaudeMD, doc.HasClaudeMD)
+	}
+}
+
+func TestDocumentToPromptDocument_EmptyPrompt(t *testing.T) {
+	t.Parallel()
+
+	doc := Document{
+		ID:       "test-uuid-456",
+		HookType: "UserPromptSubmit",
+		Prompt:   "",
+	}
+
+	pdoc := DocumentToPromptDocument(doc)
+
+	if pdoc.PromptLength != 0 {
+		t.Errorf("PromptLength = %d, want 0 for empty prompt", pdoc.PromptLength)
+	}
+	if pdoc.Prompt != "" {
+		t.Errorf("Prompt = %q, want empty string", pdoc.Prompt)
+	}
+}
+
+func TestExtractStringValues(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		data     map[string]interface{}
+		contains []string // values that should be present
+		excludes []string // values that should NOT be present
+	}{
+		{
+			name:     "flat map",
+			data:     map[string]interface{}{"a": "hello", "b": "world"},
+			contains: []string{"hello", "world"},
+			excludes: []string{"a", "b"},
+		},
+		{
+			name:     "nested map",
+			data:     map[string]interface{}{"outer": map[string]interface{}{"inner": "deep"}},
+			contains: []string{"deep"},
+			excludes: []string{"outer", "inner"},
+		},
+		{
+			name:     "mixed types",
+			data:     map[string]interface{}{"s": "text", "n": 42.0, "b": true},
+			contains: []string{"text"},
+			excludes: []string{"42", "true", "s", "n", "b"},
+		},
+		{
+			name:     "array values",
+			data:     map[string]interface{}{"list": []interface{}{"one", "two"}},
+			contains: []string{"one", "two"},
+			excludes: []string{"list"},
+		},
+		{
+			name: "empty strings skipped",
+			data: map[string]interface{}{"a": "", "b": "kept"},
+			contains: []string{"kept"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			result := extractStringValues(tc.data)
+			for _, want := range tc.contains {
+				if !strings.Contains(result, want) {
+					t.Errorf("result %q should contain %q", result, want)
+				}
+			}
+			for _, exclude := range tc.excludes {
+				if strings.Contains(result, exclude) {
+					t.Errorf("result %q should not contain %q", result, exclude)
+				}
+			}
+		})
+	}
+}
+
+func TestExtractStringValues_EmptyMap(t *testing.T) {
+	t.Parallel()
+	if got := extractStringValues(map[string]interface{}{}); got != "" {
+		t.Errorf("extractStringValues(empty) = %q, want empty string", got)
+	}
+}
+
+func TestExtractStringValues_NilMap(t *testing.T) {
+	t.Parallel()
+	if got := extractStringValues(nil); got != "" {
+		t.Errorf("extractStringValues(nil) = %q, want empty string", got)
 	}
 }
 

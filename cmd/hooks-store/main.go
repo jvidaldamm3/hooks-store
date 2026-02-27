@@ -24,16 +24,57 @@ func main() {
 	meiliURL := flag.String("meili-url", envOrDefault("MEILI_URL", "http://localhost:7700"), "MeiliSearch endpoint")
 	meiliKey := flag.String("meili-key", envOrDefault("MEILI_KEY", ""), "MeiliSearch API key")
 	meiliIndex := flag.String("meili-index", envOrDefault("MEILI_INDEX", "hook-events"), "MeiliSearch index name")
+	promptsIndex := flag.String("prompts-index", envOrDefault("PROMPTS_INDEX", "hook-prompts"), "MeiliSearch prompts index name (empty to disable)")
+	migrate := flag.Bool("migrate", false, "Backfill top-level fields on existing documents and exit")
 	flag.Parse()
 
 	// Connect to MeiliSearch — fail fast if unreachable.
 	fmt.Printf("Connecting to MeiliSearch at %s...\n", *meiliURL)
-	ms, err := store.NewMeiliStore(*meiliURL, *meiliKey, *meiliIndex)
+	ms, err := store.NewMeiliStore(*meiliURL, *meiliKey, *meiliIndex, *promptsIndex)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 	defer ms.Close()
+
+	if *migrate {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		// Handle SIGINT during migration for clean shutdown.
+		go func() {
+			sig := make(chan os.Signal, 1)
+			signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+			defer signal.Stop(sig)
+			<-sig
+			cancel()
+		}()
+
+		fmt.Println("Starting migration...")
+		count, err := ms.MigrateDocuments(ctx, 100)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Migration failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Migration complete: %d documents processed\n", count)
+
+		fmt.Println("Migrating data_flat format...")
+		dfcount, err := ms.MigrateDataFlat(ctx, 100)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "data_flat migration failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("data_flat migration complete: %d documents processed\n", dfcount)
+
+		fmt.Println("Migrating prompts index...")
+		pcount, err := ms.MigratePrompts(ctx, 100)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Prompts migration failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Prompts migration complete: %d documents processed\n", pcount)
+		os.Exit(0)
+	}
 
 	srv := ingest.New(ms)
 
