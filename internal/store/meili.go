@@ -347,6 +347,9 @@ func extractMigrationFields(hit meilisearch.Hit) (map[string]interface{}, error)
 		if pd, ok := extractString(monitor, "project_dir"); ok {
 			partial["project_dir"] = pd
 		}
+		if hasMD, ok := extractBool(monitor, "has_claude_md"); ok {
+			partial["has_claude_md"] = hasMD
+		}
 	}
 	if cwd, ok := extractString(data, "cwd"); ok {
 		partial["cwd"] = cwd
