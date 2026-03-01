@@ -14,7 +14,7 @@
 #   MEILI_INDEX      MeiliSearch index (default: hook-events)
 #   AB_PROMPT        Override the test prompt
 #   AB_MAX_TURNS     Max turns per session (default: 50)
-#   COMPACT_WINDOW   Seconds after compaction to count re-reads (default: 120)
+#   COMPACT_WINDOW   Seconds after compaction to count re-reads (default: 300)
 #   REPORT_DIR       Directory for report output (default: /tmp/claude-experiment-<timestamp>)
 #
 # Output:
@@ -39,7 +39,7 @@ MEILI_URL="${MEILI_URL:-http://127.0.0.1:7700}"
 MEILI_KEY="${MEILI_KEY:-}"
 MEILI_INDEX="${MEILI_INDEX:-hook-events}"
 MAX_TURNS="${AB_MAX_TURNS:-50}"
-COMPACT_WINDOW="${COMPACT_WINDOW:-120}"
+COMPACT_WINDOW="${COMPACT_WINDOW:-300}"
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 REPORT_DIR="${REPORT_DIR:-/tmp/claude-experiment-$TIMESTAMP}"
 

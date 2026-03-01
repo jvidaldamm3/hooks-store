@@ -95,7 +95,8 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 	}
 
-	ln, err := net.Listen("tcp", "127.0.0.1:"+*port)
+	bindAddr := envOrDefault("BIND_ADDR", "127.0.0.1")
+	ln, err := net.Listen("tcp", bindAddr+":"+*port)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)

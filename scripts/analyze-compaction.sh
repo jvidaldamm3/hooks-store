@@ -11,14 +11,14 @@
 #   MEILI_URL       MeiliSearch endpoint (default: http://127.0.0.1:7700)
 #   MEILI_KEY       MeiliSearch API key (default: none)
 #   MEILI_INDEX     Index name (default: hook-events)
-#   COMPACT_WINDOW  Seconds after compaction to count re-reads (default: 120)
+#   COMPACT_WINDOW  Seconds after compaction to count re-reads (default: 300)
 
 set -euo pipefail
 
 MEILI_URL="${MEILI_URL:-http://127.0.0.1:7700}"
 MEILI_KEY="${MEILI_KEY:-}"
 MEILI_INDEX="${MEILI_INDEX:-hook-events}"
-COMPACT_WINDOW="${COMPACT_WINDOW:-120}"
+COMPACT_WINDOW="${COMPACT_WINDOW:-300}"
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -276,7 +276,7 @@ print_session() {
 
 # Print comparison between two sessions.
 print_comparison() {
-    local data_a="$1" data_b="$2"
+    local label_a="$1" label_b="$2" data_a="$3" data_b="$4"
 
     delta_line() {
         local label="$1" val_a="$2" val_b="$3"
@@ -305,8 +305,7 @@ print_comparison() {
     total_b=$(iv "$data_b" '.total_tools')
 
     echo "=== Comparison ==="
-    echo "  A = with CLAUDE.md, B = without CLAUDE.md"
-    echo "  Positive Δ = B used more → CLAUDE.md saved work"
+    echo "  A = $label_a, B = $label_b"
     echo ""
     delta_line "Total tool calls" "$total_a" "$total_b"
     delta_line "Exploration calls" "$explore_a" "$explore_b"
@@ -344,8 +343,8 @@ main() {
         detected=$(auto_detect_sessions)
         session_a=$(echo "$detected" | head -1)
         session_b=$(echo "$detected" | tail -1)
-        echo "  Session A (with CLAUDE.md):    $session_a"
-        echo "  Session B (without CLAUDE.md): $session_b"
+        echo "  Session A: $session_a"
+        echo "  Session B: $session_b"
         echo ""
         echo "Tip: pass session IDs explicitly if auto-detection picked wrong sessions."
         echo ""
@@ -373,14 +372,17 @@ main() {
     data_a=$(analyze_session "$session_a" "$tools_a" "$compacts_a" "$COMPACT_WINDOW")
     data_b=$(analyze_session "$session_b" "$tools_b" "$compacts_b" "$COMPACT_WINDOW")
 
+    local label_a="${LABEL_A:-with CLAUDE.md}"
+    local label_b="${LABEL_B:-without CLAUDE.md}"
+
     echo "=== Compaction Impact Analysis ==="
     echo "  Post-compaction window: ${COMPACT_WINDOW}s"
     echo ""
-    print_session "Session A (with CLAUDE.md)   " "$data_a" "$COMPACT_WINDOW"
+    print_session "Session A ($label_a)   " "$data_a" "$COMPACT_WINDOW"
     echo ""
-    print_session "Session B (without CLAUDE.md)" "$data_b" "$COMPACT_WINDOW"
+    print_session "Session B ($label_b)" "$data_b" "$COMPACT_WINDOW"
     echo ""
-    print_comparison "$data_a" "$data_b"
+    print_comparison "$label_a" "$label_b" "$data_a" "$data_b"
 }
 
 main "$@"

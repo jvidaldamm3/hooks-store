@@ -12,7 +12,7 @@
 #   MEILI_KEY        MeiliSearch API key (default: none)
 #   AB_PROMPT        Override the test prompt (default: deep multi-step exploration prompt)
 #   AB_MAX_TURNS     Max turns per session (default: 50, higher than A/B test to trigger compaction)
-#   COMPACT_WINDOW   Seconds after compaction to count re-reads (default: 120)
+#   COMPACT_WINDOW   Seconds after compaction to count re-reads (default: 300)
 
 set -euo pipefail
 
@@ -23,7 +23,7 @@ MEILI_URL="${MEILI_URL:-http://127.0.0.1:7700}"
 MEILI_KEY="${MEILI_KEY:-}"
 MEILI_INDEX="${MEILI_INDEX:-hook-events}"
 MAX_TURNS="${AB_MAX_TURNS:-50}"
-COMPACT_WINDOW="${COMPACT_WINDOW:-120}"
+COMPACT_WINDOW="${COMPACT_WINDOW:-300}"
 
 # A prompt designed to fill the context window by requiring deep, multi-step
 # exploration across many files. This maximizes the chance of triggering compaction.
