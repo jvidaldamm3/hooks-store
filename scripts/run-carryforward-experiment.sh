@@ -4,18 +4,20 @@
 #   Session B: carry-forward DISABLED → compaction → measure post-compact re-reads
 #
 # Both sessions keep CLAUDE.md (hold constant). The only variable is carry-forward.
+# Each session runs in its own git worktree so code changes don't affect the original.
 #
 # Must be run OUTSIDE of a Claude Code session (nested sessions are blocked).
 #
 # Usage: ./scripts/run-carryforward-experiment.sh [repo_path]
-#   repo_path  Path to claude-hooks-monitor repo (default: ../claude-hooks-monitor)
+#   repo_path  Path to the target repo (default: ../claude-hooks-monitor)
 #
 # Environment:
 #   MEILI_URL        MeiliSearch endpoint (default: http://127.0.0.1:7700)
 #   MEILI_KEY        MeiliSearch API key (default: none)
 #   AB_PROMPT        Override the test prompt
-#   AB_MAX_TURNS     Max turns per session (default: 50)
+#   AB_MAX_TURNS     Max turns per session (default: 80)
 #   COMPACT_WINDOW   Seconds after compaction to count re-reads (default: 300)
+#   WORKTREE_MODE    Set to "no" to run directly in REPO (default: yes)
 
 set -euo pipefail
 
@@ -24,38 +26,127 @@ REPO="${1:-$(cd "$SCRIPT_DIR/../.." && pwd)/claude-hooks-monitor}"
 MEILI_URL="${MEILI_URL:-http://127.0.0.1:7700}"
 MEILI_KEY="${MEILI_KEY:-}"
 MEILI_INDEX="${MEILI_INDEX:-hook-events}"
-MAX_TURNS="${AB_MAX_TURNS:-50}"
+MAX_TURNS="${AB_MAX_TURNS:-80}"
 COMPACT_WINDOW="${COMPACT_WINDOW:-300}"
 MONITOR_BIN="${MONITOR_BIN:-$(cd "$SCRIPT_DIR/../.." && pwd)/claude-hooks-monitor/bin/monitor}"
 CONFIG_FILE="${HOME}/.config/claude-hooks-monitor/hook_monitor.conf"
+WORKTREE_MODE="${WORKTREE_MODE:-yes}"
 
-# A prompt designed to fill the context window through multiple read-only analysis
-# passes over the codebase. Each step forces re-reading files and producing verbose
-# output, maximizing context consumption to trigger compaction.
-# The prompt is generic — works on any codebase, not tied to Go or specific packages.
-PROMPT="${AB_PROMPT:-You are performing a comprehensive read-only codebase audit. Do NOT modify any files. You MUST complete every step below IN ORDER. After each step, write a DETAILED report (at least 500 words) before moving to the next. Do NOT skip or combine steps.
+# Worktree paths (under /tmp to avoid polluting the repo).
+WORKTREE_A="/tmp/claude-cf-worktree-a"
+WORKTREE_B="/tmp/claude-cf-worktree-b"
 
-Step 1 — INVENTORY: Find and list every source file in the project. Read each file and record: path, line count, primary responsibility, and all public symbols (functions, types, constants).
+# An intensive multi-phase prompt that combines reading, writing, reviewing, and
+# rewriting. Each phase forces deep engagement with the codebase, naturally filling
+# the context window through real work rather than artificial re-read instructions.
+# Defined via heredoc to avoid bash parsing issues with special characters.
+DEFAULT_PROMPT=$(cat <<'PROMPT_EOF'
+You are performing a comprehensive codebase overhaul. Complete ALL phases below IN ORDER. Each phase builds on the previous. Be extremely thorough — read every file before changing it, verify changes compile or pass checks, and write detailed explanations.
 
-Step 2 — DEPENDENCY MAP: Re-read all source files. For each file, list every import/use/require and trace where each dependency is defined. Draw the full internal dependency graph as ASCII art.
+═══════════════════════════════════════════════════════════
+PHASE 1 — DEEP CODE REVIEW (read every source file)
+═══════════════════════════════════════════════════════════
 
-Step 3 — DATA FLOW ANALYSIS: Re-read all files that handle I/O (HTTP, files, stdin, databases). Trace every piece of external data from entry point through transformation to storage or output. Identify trust boundaries.
+Read every source file in the project. For each file, write a detailed review covering:
+- Purpose and responsibility (is it well-scoped or doing too much?)
+- Code quality: naming conventions, function length, cognitive complexity
+- Error handling: are errors propagated correctly? Any swallowed errors?
+- Edge cases: what inputs or states could cause unexpected behavior?
+- Thread safety: any shared mutable state without proper synchronization?
+- API design: are public interfaces clean, minimal, and well-documented?
 
-Step 4 — ERROR HANDLING AUDIT: Re-read every source file. Catalog every error path: what errors can occur, how they are propagated, whether they are logged, and whether callers handle them. List any swallowed or silently ignored errors.
+Rate each file A/B/C/D for quality. List every issue found with file path and line reference.
 
-Step 5 — CONCURRENCY REVIEW: Re-read all files that use threads, goroutines, async, mutexes, channels, or shared state. Identify all concurrent access patterns. Analyze lock ordering, potential deadlocks, and race conditions. If no concurrency exists, document why and whether it should.
+═══════════════════════════════════════════════════════════
+PHASE 2 — BUG HUNTING AND FIXING
+═══════════════════════════════════════════════════════════
 
-Step 6 — API SURFACE ANALYSIS: Re-read all public interfaces (HTTP handlers, CLI entry points, exported functions). Document every input parameter, its validation, accepted ranges, and what happens with malformed input. Include wire formats (JSON schemas, CLI flags).
+Re-read all source files with a security and correctness mindset. Hunt for:
+- Off-by-one errors, boundary conditions, integer overflow potential
+- Resource leaks (unclosed files, connections, goroutines, channels)
+- Race conditions and TOCTOU vulnerabilities
+- Nil/null pointer dereferences, uninitialized variables
+- Input validation gaps (injection, path traversal, overflow)
+- Logic errors in conditionals, loops, and state machines
+- Dead code paths that indicate missing functionality
+- Panics or unrecoverable errors that should be handled gracefully
 
-Step 7 — TEST COVERAGE GAPS: Read all test files. For each test, explain what behavior it verifies. Then re-read the corresponding source files and identify untested code paths, edge cases, and boundary conditions. Rank gaps by severity.
+For each bug found: explain the bug, show the problematic code, explain the fix, then APPLY the fix. Re-read the file after fixing to verify correctness.
 
-Step 8 — CONFIGURATION AUDIT: Re-read all config loading code and entry points. Map every configuration source (env vars, files, flags, defaults). Document precedence order, what happens when config is missing, and whether defaults are safe.
+═══════════════════════════════════════════════════════════
+PHASE 3 — CODE SIMPLIFICATION
+═══════════════════════════════════════════════════════════
 
-Step 9 — PERFORMANCE REVIEW: Re-read files with loops, allocations, I/O, or data structures. Identify potential performance bottlenecks: O(n^2) patterns, unbounded allocations, blocking calls in hot paths, missing caching opportunities.
+Re-read every file you reviewed in Phase 1. For each file, identify opportunities to:
+- Replace verbose patterns with idiomatic constructs
+- Extract repeated logic into well-named helper functions
+- Reduce nesting depth (guard clauses, early returns)
+- Simplify complex conditionals into clearer expressions
+- Remove unnecessary abstractions or over-engineering
+- Consolidate duplicated code across files
+- Replace manual loops with standard library functions where clearer
 
-Step 10 — ARCHITECTURE ASSESSMENT: Re-read the 5 most important files in the project. Write a 1000+ word architectural review: evaluate separation of concerns, coupling between modules, extensibility, and technical debt. Compare against best practices for the language/framework used.
+Apply each simplification. Show the before/after for significant changes. Re-read modified files to ensure nothing broke.
 
-CRITICAL: You must re-read actual source files at every step. Do not rely on memory from previous steps. Write thorough, verbose analysis. This is a read-only audit — do not create, edit, or write any files.}"
+═══════════════════════════════════════════════════════════
+PHASE 4 — DOCUMENTATION AND COMMENTS
+═══════════════════════════════════════════════════════════
+
+Re-read all source files (including your modifications from Phases 2-3). Add or improve comments:
+- Every exported/public function, type, and constant needs a doc comment explaining WHAT it does, WHY it exists, and any non-obvious behavior
+- Complex algorithms need step-by-step inline comments
+- Non-obvious design decisions need "why" comments (not "what" comments)
+- Remove any misleading, outdated, or redundant comments
+- Add package-level documentation explaining the package's role in the system
+- Document all assumptions, invariants, and constraints
+- Add examples in doc comments for non-trivial public APIs
+
+Keep comments concise and high-signal. A good comment explains WHY, not WHAT.
+
+═══════════════════════════════════════════════════════════
+PHASE 5 — ROBUSTNESS HARDENING
+═══════════════════════════════════════════════════════════
+
+Re-read all source files again. Harden the codebase:
+- Add input validation at every public API boundary
+- Add defensive nil/null checks where callers might pass bad data
+- Ensure all error returns include enough context for debugging
+- Add timeouts to all blocking operations (network, file I/O, channels)
+- Ensure graceful degradation when dependencies are unavailable
+- Add or improve logging at key decision points (with structured fields)
+- Verify all cleanup happens even in error paths (defer, finally, try-with-resources)
+- Check that configuration has sensible defaults and validates ranges
+
+Apply each hardening change. Verify the build still passes after each batch of changes.
+
+═══════════════════════════════════════════════════════════
+PHASE 6 — CROSS-CUTTING CONSISTENCY REVIEW
+═══════════════════════════════════════════════════════════
+
+Re-read EVERY file in the project one final time. Check for cross-cutting consistency:
+- Naming conventions: are similar concepts named the same way across packages?
+- Error patterns: is the error handling style consistent across the codebase?
+- Logging: same format, same levels, same structured fields everywhere?
+- Configuration: consistent precedence (flags > env > file > defaults) across all settings?
+- Testing patterns: same assertion style, same test structure, same mocking approach?
+- Import organization: same grouping and ordering everywhere?
+
+Fix any inconsistencies found. Write a final summary report with:
+- Total issues found and fixed (by category)
+- Files modified (with brief description of changes)
+- Remaining technical debt or known limitations
+- Architecture quality assessment (1-10 with justification)
+
+CRITICAL INSTRUCTIONS:
+- You MUST read actual source files before every modification — never work from memory.
+- Each phase requires re-reading files, even if you read them in a previous phase.
+- Apply all fixes and improvements directly — do not just list recommendations.
+- After each phase, briefly verify the project still builds or tests pass.
+- Write detailed explanations for every change to justify your decisions.
+- If you find issues during a later phase that relate to an earlier phase, go back and fix them.
+PROMPT_EOF
+)
+PROMPT="${AB_PROMPT:-$DEFAULT_PROMPT}"
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -82,7 +173,7 @@ get_session_ids() {
         | jq -r '.facetDistribution.session_id // {} | keys[]' | sort
 }
 
-# Verify a session's cwd matches the expected repo path.
+# Verify a session's cwd matches the expected path.
 # Returns 0 if match, 1 if not (or if session has no events).
 verify_session_cwd() {
     local session_id="$1" expected_cwd="$2"
@@ -97,12 +188,12 @@ verify_session_cwd() {
     [[ "$norm_cwd" == "$norm_expected" ]]
 }
 
-# From a list of new session IDs, find the one whose cwd matches $REPO.
+# From a list of new session IDs, find the one whose cwd matches a given path.
 find_matching_session() {
-    local new_sessions="$1"
+    local new_sessions="$1" target_dir="$2"
     while IFS= read -r sid; do
         [[ -z "$sid" ]] && continue
-        if verify_session_cwd "$sid" "$REPO"; then
+        if verify_session_cwd "$sid" "$target_dir"; then
             echo "$sid"
             return 0
         fi
@@ -191,11 +282,49 @@ EOF
     ok "carry-forward set to: $enabled"
 }
 
+# ── Worktree management ─────────────────────────────────────────────────────
+
+create_worktree() {
+    local wt_path="$1" label="$2"
+    if [[ -d "$wt_path" ]]; then
+        echo "  Removing stale worktree at $wt_path..."
+        git -C "$REPO" worktree remove "$wt_path" --force 2>/dev/null || rm -rf "$wt_path"
+    fi
+    git -C "$REPO" worktree add "$wt_path" HEAD --detach
+    ok "Worktree $label: $wt_path"
+}
+
+remove_worktree() {
+    local wt_path="$1"
+    if [[ -d "$wt_path" ]]; then
+        git -C "$REPO" worktree remove "$wt_path" --force 2>/dev/null || rm -rf "$wt_path"
+    fi
+}
+
+# Verify hook-client is available. It's a global binary (in PATH or ~/.local/bin),
+# not a per-repo artifact — no need to copy anything into worktrees.
+check_hook_client() {
+    if command -v hook-client &>/dev/null; then
+        ok "hook-client: $(command -v hook-client)"
+    elif [[ -f "$HOME/.local/bin/hook-client" ]]; then
+        ok "hook-client: $HOME/.local/bin/hook-client"
+    else
+        warn "hook-client not found in PATH — sessions won't emit events"
+    fi
+}
+
+# ── Cleanup ──────────────────────────────────────────────────────────────────
+
 cleanup() {
     stop_monitor
     # Restore carry-forward to enabled (default).
     if [[ -f "$CONFIG_FILE" ]]; then
         set_carryforward "yes" 2>/dev/null || true
+    fi
+    # Remove worktrees.
+    if [[ "$WORKTREE_MODE" == "yes" ]]; then
+        remove_worktree "$WORKTREE_A" 2>/dev/null || true
+        remove_worktree "$WORKTREE_B" 2>/dev/null || true
     fi
 }
 trap cleanup EXIT
@@ -240,6 +369,8 @@ if ! command -v jq &>/dev/null; then
 fi
 ok "jq: $(jq --version)"
 
+check_hook_client
+
 if [[ ! -f "$CONFIG_FILE" ]]; then
     fail "Monitor config not found: $CONFIG_FILE"
 fi
@@ -250,10 +381,24 @@ ok "Config: $CONFIG_FILE"
 log "Experiment configuration"
 echo "  Variable:          carry-forward (enabled vs disabled)"
 echo "  Control:           CLAUDE.md present in both sessions"
+echo "  Worktree mode:     $WORKTREE_MODE"
 echo "  Max turns:         $MAX_TURNS"
 echo "  Compact window:    ${COMPACT_WINDOW}s"
 echo "  Prompt:            ${PROMPT:0:100}..."
 echo ""
+
+# ── Create worktrees ─────────────────────────────────────────────────────────
+
+if [[ "$WORKTREE_MODE" == "yes" ]]; then
+    log "Creating worktrees (original repo stays untouched)"
+    create_worktree "$WORKTREE_A" "A (carry-forward ON)"
+    create_worktree "$WORKTREE_B" "B (carry-forward OFF)"
+    SESSION_A_DIR="$WORKTREE_A"
+    SESSION_B_DIR="$WORKTREE_B"
+else
+    SESSION_A_DIR="$REPO"
+    SESSION_B_DIR="$REPO"
+fi
 
 # ── Snapshot sessions before ─────────────────────────────────────────────────
 
@@ -268,14 +413,14 @@ set_carryforward "yes"
 
 start_monitor
 
-log "Session A — carry-forward ENABLED (compaction experiment)"
-echo "  Directory: $REPO"
+log "Session A — carry-forward ENABLED"
+echo "  Directory: $SESSION_A_DIR"
 echo "  Max turns: $MAX_TURNS"
 echo ""
 
 SESSION_A_OUTPUT=$(mktemp /tmp/claude-cf-session-a.XXXXXX)
 (
-    cd "$REPO"
+    cd "$SESSION_A_DIR"
     env -u CLAUDECODE claude -p "$PROMPT" \
         --output-format text \
         --max-turns "$MAX_TURNS" \
@@ -293,10 +438,10 @@ wait_for_indexing
 log "Identifying Session A"
 SESSIONS_AFTER_A=$(get_session_ids)
 NEW_A=$(comm -13 <(echo "$SESSIONS_BEFORE" | grep -v '^$') <(echo "$SESSIONS_AFTER_A" | grep -v '^$'))
-SESSION_A_ID=$(find_matching_session "$NEW_A" || true)
+SESSION_A_ID=$(find_matching_session "$NEW_A" "$SESSION_A_DIR" || true)
 
 if [[ -z "$SESSION_A_ID" ]]; then
-    warn "Could not detect Session A's ID (no new session matched cwd=$REPO)."
+    warn "Could not detect Session A's ID (no new session matched cwd=$SESSION_A_DIR)."
 else
     ok "Session A ID: $SESSION_A_ID"
     compact_a=$(curl_meili POST "/indexes/$MEILI_INDEX/search" \
@@ -314,14 +459,14 @@ set_carryforward "no"
 
 start_monitor
 
-log "Session B — carry-forward DISABLED (compaction experiment)"
-echo "  Directory: $REPO"
+log "Session B — carry-forward DISABLED"
+echo "  Directory: $SESSION_B_DIR"
 echo "  Max turns: $MAX_TURNS"
 echo ""
 
 SESSION_B_OUTPUT=$(mktemp /tmp/claude-cf-session-b.XXXXXX)
 (
-    cd "$REPO"
+    cd "$SESSION_B_DIR"
     env -u CLAUDECODE claude -p "$PROMPT" \
         --output-format text \
         --max-turns "$MAX_TURNS" \
@@ -339,10 +484,10 @@ wait_for_indexing
 log "Identifying Session B"
 SESSIONS_AFTER_B=$(get_session_ids)
 NEW_B=$(comm -13 <(echo "$SESSIONS_AFTER_A" | grep -v '^$') <(echo "$SESSIONS_AFTER_B" | grep -v '^$'))
-SESSION_B_ID=$(find_matching_session "$NEW_B" || true)
+SESSION_B_ID=$(find_matching_session "$NEW_B" "$SESSION_B_DIR" || true)
 
 if [[ -z "$SESSION_B_ID" ]]; then
-    warn "Could not detect Session B's ID (no new session matched cwd=$REPO)."
+    warn "Could not detect Session B's ID (no new session matched cwd=$SESSION_B_DIR)."
 fi
 
 stop_monitor
@@ -353,6 +498,9 @@ log "Running compaction analysis"
 echo "  A = carry-forward ENABLED  (both sessions have CLAUDE.md)"
 echo "  B = carry-forward DISABLED (both sessions have CLAUDE.md)"
 echo "  Only variable: carry-forward toggle"
+if [[ "$WORKTREE_MODE" == "yes" ]]; then
+    echo "  Isolation: git worktrees (original repo untouched)"
+fi
 echo ""
 
 if [[ -n "${SESSION_A_ID:-}" && -n "${SESSION_B_ID:-}" ]]; then
@@ -378,6 +526,11 @@ log "Experiment complete"
 echo ""
 echo "  Session A (carry-forward ON):  $SESSION_A_OUTPUT"
 echo "  Session B (carry-forward OFF): $SESSION_B_OUTPUT"
+if [[ "$WORKTREE_MODE" == "yes" ]]; then
+    echo ""
+    echo "  Worktrees cleaned up automatically."
+    echo "  Original repo at $REPO was not modified."
+fi
 echo ""
 echo "  If neither session triggered compaction, try:"
-echo "    AB_MAX_TURNS=80 ./scripts/run-carryforward-experiment.sh"
+echo "    AB_MAX_TURNS=100 ./scripts/run-carryforward-experiment.sh $REPO"
