@@ -82,6 +82,34 @@ get_session_ids() {
         | jq -r '.facetDistribution.session_id // {} | keys[]' | sort
 }
 
+# Verify a session's cwd matches the expected repo path.
+# Returns 0 if match, 1 if not (or if session has no events).
+verify_session_cwd() {
+    local session_id="$1" expected_cwd="$2"
+    local cwd
+    cwd=$(curl_meili POST "/indexes/$MEILI_INDEX/search" \
+        "$(printf '{"filter":"session_id = '\''%s'\''","sort":["timestamp_unix:asc"],"limit":1}' "$session_id")" \
+        | jq -r '.hits[0].data.cwd // ""')
+    # Normalize: resolve symlinks and strip trailing slash.
+    local norm_cwd norm_expected
+    norm_cwd=$(echo "$cwd" | sed 's|/$||')
+    norm_expected=$(cd "$expected_cwd" 2>/dev/null && pwd -P | sed 's|/$||')
+    [[ "$norm_cwd" == "$norm_expected" ]]
+}
+
+# From a list of new session IDs, find the one whose cwd matches $REPO.
+find_matching_session() {
+    local new_sessions="$1"
+    while IFS= read -r sid; do
+        [[ -z "$sid" ]] && continue
+        if verify_session_cwd "$sid" "$REPO"; then
+            echo "$sid"
+            return 0
+        fi
+    done <<< "$new_sessions"
+    return 1
+}
+
 wait_for_indexing() {
     local max_wait=30 waited=0
     while [[ $waited -lt $max_wait ]]; do
@@ -264,10 +292,11 @@ wait_for_indexing
 
 log "Identifying Session A"
 SESSIONS_AFTER_A=$(get_session_ids)
-SESSION_A_ID=$(comm -13 <(echo "$SESSIONS_BEFORE" | grep -v '^$') <(echo "$SESSIONS_AFTER_A" | grep -v '^$') | head -1)
+NEW_A=$(comm -13 <(echo "$SESSIONS_BEFORE" | grep -v '^$') <(echo "$SESSIONS_AFTER_A" | grep -v '^$'))
+SESSION_A_ID=$(find_matching_session "$NEW_A" || true)
 
 if [[ -z "$SESSION_A_ID" ]]; then
-    warn "Could not detect Session A's ID (hooks may not be configured)."
+    warn "Could not detect Session A's ID (no new session matched cwd=$REPO)."
 else
     ok "Session A ID: $SESSION_A_ID"
     compact_a=$(curl_meili POST "/indexes/$MEILI_INDEX/search" \
@@ -309,10 +338,11 @@ wait_for_indexing
 
 log "Identifying Session B"
 SESSIONS_AFTER_B=$(get_session_ids)
-SESSION_B_ID=$(comm -13 <(echo "$SESSIONS_AFTER_A" | grep -v '^$') <(echo "$SESSIONS_AFTER_B" | grep -v '^$') | head -1)
+NEW_B=$(comm -13 <(echo "$SESSIONS_AFTER_A" | grep -v '^$') <(echo "$SESSIONS_AFTER_B" | grep -v '^$'))
+SESSION_B_ID=$(find_matching_session "$NEW_B" || true)
 
 if [[ -z "$SESSION_B_ID" ]]; then
-    warn "Could not detect Session B's ID."
+    warn "Could not detect Session B's ID (no new session matched cwd=$REPO)."
 fi
 
 stop_monitor
